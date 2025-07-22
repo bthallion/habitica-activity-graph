@@ -1,2 +1,2 @@
 # habitica-activity-graph
-Visualizes and stores daily habit activity on Habitica in a calendar grid
+Visualizes and stores daily habit activity from Habitica in a (Github inspired) activity graph implemented in Google Sheets
