@@ -5,12 +5,33 @@
  * https://habitica.fandom.com/wiki/Counting_Tasks
  */
 
+// [Authors] Add global variables here
+// - Note that these do not persist in between script calls
+// - If you want to save values between calls, use PropertiesService
+// - See https://developers.google.com/apps-script/reference/properties/properties-service
+const scriptProperties = PropertiesService.getScriptProperties();
+
 /* ========================================== */
 /* [Users] Required script data to fill in    */
 /* ========================================== */
-const USER_ID = "PasteYourUserIdHere";
-const API_TOKEN = "PasteYourApiTokenHere";
+let cachedUserId = null;
+let cachedApiToken = null;
 // IMPORTANT: Do not share your API token with anyone!
+
+function getLoginCreds() {
+  if (cachedUserId && cachedApiToken) {
+    return { userId: cachedUserId, apiKey: cachedApiToken };
+  }
+  const constants = SpreadsheetApp.getActiveSpreadsheet()
+    .getSheetByName('Authorization');
+  const range = constants.getRange('E10:E11');
+  const [[userId], [apiKey]] = range.getValues();
+
+  cachedUserId = userId;
+  cachedApiToken = apiKey;
+
+  return { userId, apiKey };
+}
 
 /* ========================================== */
 /* [Users] Required customizations to fill in */
@@ -32,13 +53,7 @@ const API_TOKEN = "PasteYourApiTokenHere";
 // - This is used for the "X-Client" HTTP header
 // - See https://habitica.fandom.com/wiki/Guidance_for_Comrades#X-Client_Header
 const AUTHOR_ID = "b477462a-5bb5-4040-9505-f0b049b4f0bb";
-const SCRIPT_NAME = "HabiticaCountingTasks";
-
-// [Authors] Add global variables here
-// - Note that these do not persist in between script calls
-// - If you want to save values between calls, use PropertiesService
-// - See https://developers.google.com/apps-script/reference/properties/properties-service
-const scriptProperties = PropertiesService.getScriptProperties();
+const SCRIPT_NAME = "HabiticaActivityGraph";
 
 /* =================================== */
 /* [Authors] Below you find functions, */
@@ -145,7 +160,7 @@ function deleteTriggers() {
 function deleteWebhooks() {
   // [Authors] This function deletes all existing webhooks to your script
 
-  let response = api_fetch("https://habitica.com/api/v3/user/webhook", GET_PARAMS);
+  let response = api_fetch("https://habitica.com/api/v3/user/webhook", getGetParams());
   let obj = parseJSON(response);
   let webhooks = obj.data;
 
@@ -157,7 +172,7 @@ function deleteWebhooks() {
 
     for (let webhook of webhooks) {
       if (webhook.url == webAppURL) {
-        api_fetch("https://habitica.com/api/v3/user/webhook/" + webhook.id, DELETE_PARAMS);
+        api_fetch("https://habitica.com/api/v3/user/webhook/" + webhook.id, getDeleteParams());
       }
     }
   }
@@ -170,19 +185,21 @@ function validateOptions() {
 
   let valid = true;
 
-  if (typeof INT_USER_ID !== "string" || !TOKEN_REGEXP.test(INT_USER_ID)) {
+  const { userId, apiKey } = getLoginCreds();
+
+  if (typeof userId !== "string" || !TOKEN_REGEXP.test(userId)) {
     logError("USER_ID must equal your Habitica User ID.\n\ne.g. const USER_ID = \"12345678-90ab-416b-cdef-1234567890ab\";\n\nYour Habitica User ID can be found at https://habitica.com/user/settings/api");
     valid = false;
   }
 
-  if (typeof INT_API_TOKEN !== "string" || !TOKEN_REGEXP.test(INT_API_TOKEN)) {
+  if (typeof apiKey !== "string" || !TOKEN_REGEXP.test(apiKey)) {
     logError("API_TOKEN must equal your Habitica API Token.\n\ne.g. const API_TOKEN = \"2345678-90ab-416b-cdef-1234567890ab\";\n\nYour Habitica API Token can be found at https://habitica.com/user/settings/api");
     valid = false;
   }
 
   // test credentials
   if (valid) {
-    valid = testCredentials();
+    valid = TEST_CREDENTIALS(userId, apiKey);
   }
 
   if (!valid) {
@@ -192,14 +209,14 @@ function validateOptions() {
   return valid;
 }
 
-function testCredentials() {
+function TEST_CREDENTIALS(userId, apiKey) {
   // [Authors] This function tests the user credentials
 
   try {
-    api_getUser();
+    api_fetch("https://habitica.com/api/v3/user", getGetParams(userId, apiKey))
   }
   catch (error) {
-    if (error.message.startsWith("Request failed") && error.cause.getResponseCode() == 401) {
+    if (error.message.startsWith("Request failed") && error.cause?.getResponseCode?.() == 401) {
       logError("Your USER_ID and/or API_TOKEN is incorrect. Both of these can be found at https://habitica.com/user/settings/api");
       return false;
     }
