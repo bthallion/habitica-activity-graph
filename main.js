@@ -47,13 +47,11 @@ function writeTaskData(dailiesCompletedMap) {
     const today = new Date();
     const rowDate = new Date(dateString);
 
-    // If a task is older than a month, Habitica may have lost our data, so we will
-    // join the cached results with the currently fetched results as a best effort
-    if (monthDiff([rowDate, today]) >= 1) {
+    if (getInclusiveDaysBetweenDates([rowDate, today]) >= 2) {
       newIdsDue = Array.from(new Set([...oldIdsDue.split(','), ...idsDue].filter(Boolean)));
       newIdsCompleted = Array.from(new Set([...oldIdsCompleted.split(','), ...idsCompleted].filter(Boolean)));
     } else {
-      // Less than a month, it's more likely that a change in due / completed is intentional
+      // A day or less, it's more likely that a change in due / completed ids is intentional
       // and not a result of lost data
       newIdsDue = idsDue;
       newIdsCompleted = idsCompleted;
@@ -89,14 +87,17 @@ function updateTaskData() {
   writeTaskData(dailiesCompletedMap);
 }
 
+function refreshGraph() {
+  updateTaskData();
+  renderActivityGraph();
+}
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Habitica')
-    .addItem('Set up task activity synchronization', 'runDoGet')
-    .addItem('Manually sync task activity', 'updateTaskData')
+    .addItem('Manually sync task activity', 'refreshGraph')
+    .addItem('Redraw graph', 'renderActivityGraph')
     .addToUi();
-
-  // updateTaskData();
 }
 
 function onEdit(evt) {
@@ -146,6 +147,7 @@ const COMPLETED_CELL_COLOR = '#56d364';
 const STREAK_CELL_COLOR = '#ffc512';
 const STREAK_FLOWER = '🌻';
 const TODAY_PLANT = '🪴';
+const TODAY_SEEDLING = '🌱';
 
 const TEXT_COLOR = '#f0f6fc';
 
@@ -211,30 +213,39 @@ function getDateRange() {
   const firstDay = DAYS.indexOf(trackerSheet.getRange(FIRST_DAY_OF_WEEK_DROPDOWN_CELL).getValue());
   const lastDay = firstDay - 1 < 0 ? firstDay - 1 + 7 : firstDay - 1;
 
+  const startDate = new Date(new Date().toDateString());
+  const endDate = new Date(new Date().toDateString());
   switch (timeDomain) {
     case 'Last 12 Months':
-      const startDate = new Date(new Date().toDateString());
       startDate.setMonth(startDate.getMonth() - 12);
-      let firstDayDiff = startDate.getDay() - firstDay;
-      if (firstDayDiff < 0) {
-        firstDayDiff += 7;
-      }
-      startDate.setDate(startDate.getDate() - firstDayDiff);
-
-      const endDate = new Date(new Date().toDateString());
-      let lastDayDiff = lastDay - endDate.getDay();
-      if (lastDayDiff < 0) {
-        lastDayDiff += 7;
-      }
-      endDate.setDate(endDate.getDate() + lastDayDiff);
-      const diffMod = getInclusiveDaysBetweenDates([startDate, endDate]) % (weeksInRow * 7);
-      // If the number of weeks per row doesn't mod evenly into the total days,
-      // add the difference so that we have an even grid
-      if (diffMod !== 0) {
-        endDate.setDate(endDate.getDate() + (weeksInRow * 7 - diffMod));
-      }
+      break;
+    case 'Last 6 Months':
+      startDate.setMonth(startDate.getMonth() - 6);
+      break;
+    case '2025':
+      startDate.setFullYear(2025, 0, 1);
+      endDate.setFullYear(2025, 11, 31);
       return [startDate, endDate];
   }
+
+  let firstDayDiff = startDate.getDay() - firstDay;
+  if (firstDayDiff < 0) {
+    firstDayDiff += 7;
+  }
+  startDate.setDate(startDate.getDate() - firstDayDiff);
+
+  let lastDayDiff = lastDay - endDate.getDay();
+  if (lastDayDiff < 0) {
+    lastDayDiff += 7;
+  }
+  endDate.setDate(endDate.getDate() + lastDayDiff);
+  const diffMod = getInclusiveDaysBetweenDates([startDate, endDate]) % (weeksInRow * 7);
+  // If the number of weeks per row doesn't mod evenly into the total days,
+  // add the difference so that we have an even grid
+  if (diffMod !== 0) {
+    endDate.setDate(endDate.getDate() + (weeksInRow * 7 - diffMod));
+  }
+  return [startDate, endDate];
 }
 
 function getGraphConfig() {
@@ -432,8 +443,16 @@ function renderActivityGraph() {
       if (cell.date === todayString) {
         if (color === STREAK_CELL_COLOR) {
           cellRange.setValue(STREAK_FLOWER);
+        } else if (color === EMPTY_CELL_COLOR) {
+          cellRange.setValue(TODAY_SEEDLING);
         } else {
           cellRange.setValue(TODAY_PLANT);
+        }
+        const { idsDue, idsCompleted } = taskData[cell.date] ?? {};
+        if (idsDue && idsCompleted) {
+          cellRange.setNote(cell.date + '\n' + `${idsCompleted.length}/${idsDue.length} tasks completed`);
+        } else {
+          cellRange.setNote(cell.date);
         }
       } else if (cell.date === yesterdayString && color === STREAK_CELL_COLOR) {
         if (cellColorMap[todayString] !== STREAK_CELL_COLOR) {
