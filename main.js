@@ -53,8 +53,9 @@ function writeTaskData(dailiesCompletedMap) {
     } else {
       // A day or less, it's more likely that a change in due / completed ids is intentional
       // and not a result of lost data
-      newIdsDue = idsDue;
-      newIdsCompleted = idsCompleted;
+      newIdsDue = Array.from(new Set(idsDue));
+      // When tasks are completed outside of their 24 period, repeat IDs completed / due are assigned to the next day
+      newIdsCompleted = Array.from(new Set(idsCompleted));
     }
 
     dataSheet.getRange(`A${dataRow}:E${dataRow}`).setValues([[
@@ -71,7 +72,8 @@ function updateTaskData() {
   const response = fetchUserInfo();
   const dailiesCompletedMap = response.data
     .filter((task) => task.type === 'daily')
-    .reduce((acc, { history, id }) => {
+    .reduce((acc, task) => {
+      const { history, id } = task;
       for (const { date, isDue, completed } of history) {
         const dateString = new Date(date).toDateString();
         const row = acc[dateString] ?? {
@@ -79,7 +81,7 @@ function updateTaskData() {
           idsCompleted: [],
         };
         if (isDue) row.idsDue.push(id);
-        if (completed) row.idsCompleted.push(id);
+        if (completed && isDue) row.idsCompleted.push(id);
         acc[dateString] = row;
       }
       return acc;
@@ -87,16 +89,57 @@ function updateTaskData() {
   writeTaskData(dailiesCompletedMap);
 }
 
-function refreshGraph() {
+const PROGRESS_TILE_CELLS = 'BE3:BE9';
+const PROGRESS_TILE_TEXT_CELL = 'BE6';
+
+function updateProgressTile() {
+  const trackerSheet = SpreadsheetApp.getActiveSpreadsheet()
+    .getSheetByName('Tracker');
+  const today = new Date().toDateString();
+  const taskData = getTaskData();
+  const { idsCompleted, idsDue } = taskData[today] ?? { idsCompleted: [], idsDue: [] };
+  const color = getCompletionGradientCellColor(idsCompleted.length / (idsDue.length || 1));
+  trackerSheet.getRange(PROGRESS_TILE_CELLS)
+    .setBackground(color)
+    .setBorder(
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      BG_CELL_COLOR,
+      SpreadsheetApp.BorderStyle.SOLID_THICK,
+    )
+    .setBorder(
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      color,
+      SpreadsheetApp.BorderStyle.SOLID,
+    );
+  trackerSheet.getRange(PROGRESS_TILE_TEXT_CELL).setValue(`${idsCompleted.length}/${idsDue.length}`);
+}
+
+function refreshTracker() {
   updateTaskData();
   renderActivityGraph();
+  updateProgressTile();
+}
+
+function redrawGraph() {
+  renderActivityGraph();
+  updateProgressTile();
 }
 
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Habitica')
-    .addItem('Manually sync task activity', 'refreshGraph')
-    .addItem('Redraw graph', 'renderActivityGraph')
+    .addItem('Manually sync task activity', 'refreshTracker')
+    .addItem('Redraw graph', 'redrawGraph')
     .addToUi();
 }
 
@@ -107,7 +150,7 @@ function onEdit(evt) {
     case WEEK_AXIS_DROPDOWN_CELL:
     case FIRST_DAY_OF_WEEK_DROPDOWN_CELL:
     case DIRECTION_DROPDOWN_CELL:
-      renderActivityGraph();
+      redrawGraph();
       break;
   }
 }
@@ -287,11 +330,11 @@ function getGraphCells() {
       if (isVertical && isNormal) {
         dayOffset = i + (height * j);
       } else if (isVertical) {
-        dayOffset = i + (height * (height - 1 - j));
+        dayOffset = i + (height * (width - 1 - j));
       } else if (!isVertical && isNormal) {
         dayOffset = j + (width * i);
       } else {
-        dayOffset = j + (width * (width - 1 - i));
+        dayOffset = j + (width * (height - 1 - i));
       }
       const cellDate = new Date(startDate);
       cellDate.setDate(cellDate.getDate() + dayOffset);
@@ -364,6 +407,33 @@ function drawLabels() {
         trackerSheet.getRange(cell.row - 1, cell.col).setValue(MONTHS[date.getMonth()] + '   ');
       }
     }
+  } else {
+    for (let i = 0; i < graph[0].length; i += 2) {
+      const cell = graph[0][i];
+      const date = new Date(cell.date);
+      const dayLabel = DAY_LABELS[date.getDay()];
+      trackerSheet.getRange(cell.row - 1, cell.col).setValue(dayLabel + '   ');
+    }
+
+    const labels = new Set();
+    const labelPoints = new Set();
+    for (let i = 0; i < graph.length; i++) {
+      const cell = graph[i][0];
+      const date = new Date(cell.date);
+      const monthYear = `${date.getMonth()}-${date.getFullYear()}`;
+      // always draw the first cell label
+      if (i === 0) {
+        labelPoints.add(i);
+        labels.add(monthYear);
+      } else if (!labels.has(monthYear) && (!labelPoints.has(i - 1) || i === graph.length - 1)) {
+        labelPoints.add(i);
+        labels.add(monthYear);
+      }
+
+      if (labelPoints.has(i)) {
+        trackerSheet.getRange(cell.row, cell.col - 1).setValue(MONTHS[date.getMonth()] + '   ');
+      }
+    }
   }
 }
 
@@ -389,7 +459,7 @@ function getCellColors(taskData) {
       if (dateString === today) {
         if (percentDone === 1) {
           const previousTask = tasks[index + 1];
-          if (previousTask.idsCompleted / previousTask.idsDue === 1) {
+          if (previousTask.idsCompleted.length / previousTask.idsDue.length === 1) {
             acc[dateString] = STREAK_CELL_COLOR;
             return acc;
           }
